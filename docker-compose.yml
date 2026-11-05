@@ -2,6 +2,7 @@ services:
   postgres:
     # Pinned to 16 to match local client tools: pg_dump refuses to dump a newer server major.
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres # local development only
@@ -17,6 +18,23 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_ENV: local
+      HTTP_PORT: "8080"
+      # Service name and container port: 55432 only exists on the host.
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/dining?sslmode=disable
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Must exceed the app's shutdownTimeout (10s), otherwise Docker's SIGKILL
+    # can cut graceful shutdown short.
+    stop_grace_period: 15s
 
 volumes:
   postgres-data:

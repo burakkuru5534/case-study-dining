@@ -1,0 +1,15 @@
+# Keep secrets, VCS data and local noise out of the build context.
+.git
+.idea
+.vscode
+.env
+.env.*
+!.env.example
+docs
+bin
+dist
+coverage.out
+*.test
+*.exe
+Dockerfile
+docker-compose.yml
