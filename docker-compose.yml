@@ -1,0 +1,22 @@
+services:
+  postgres:
+    # Pinned to 16 to match local client tools: pg_dump refuses to dump a newer server major.
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres # local development only
+      POSTGRES_DB: dining
+    ports:
+      # Host port 55432 avoids clashing with native PostgreSQL installs (5432/5433).
+      # Bound to loopback so the dev database is not reachable from the LAN.
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dining"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  postgres-data:

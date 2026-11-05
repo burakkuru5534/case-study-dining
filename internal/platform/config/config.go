@@ -20,10 +20,8 @@ const (
 
 // Config holds the runtime configuration of the API process.
 type Config struct {
-	AppEnv   string
-	HTTPPort int
-
-	// DatabaseURL is optional until PostgreSQL connectivity is introduced.
+	AppEnv      string
+	HTTPPort    int
 	DatabaseURL string
 }
 
@@ -64,6 +62,12 @@ func load(getenv func(string) string) (Config, error) {
 		default:
 			cfg.HTTPPort = port
 		}
+	}
+
+	// Only presence is checked here; the URL format is validated by the
+	// database driver when the pool is created.
+	if cfg.DatabaseURL == "" {
+		errs = append(errs, errors.New("DATABASE_URL: required"))
 	}
 
 	if err := errors.Join(errs...); err != nil {
