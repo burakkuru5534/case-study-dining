@@ -19,8 +19,21 @@ services:
       timeout: 3s
       retries: 15
 
+  # One-shot: applies pending migrations and exits. The API starts only if it exits 0.
+  migrate:
+    build: .
+    image: case-study-dining:local
+    entrypoint: ["/migrate"]
+    restart: "no"
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/dining?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build: .
+    image: case-study-dining:local
     restart: unless-stopped
     environment:
       APP_ENV: local
@@ -32,6 +45,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     # Must exceed the app's shutdownTimeout (10s), otherwise Docker's SIGKILL
     # can cut graceful shutdown short.
     stop_grace_period: 15s

@@ -1,0 +1,5 @@
+-- Baseline migration: intentionally contains no schema changes.
+--
+-- It establishes version 1 so the migration pipeline (embed, runner, compose
+-- one-shot service) can be verified end to end before the domain schema is
+-- introduced in 0002.
