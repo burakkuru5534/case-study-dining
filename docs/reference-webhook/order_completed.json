@@ -1,0 +1,16 @@
+{
+  "event_id": "evt_01JC4Z8Q2W",
+  "event_type": "order.completed",
+  "tenant_ref": "chain-istanbul",
+  "order": {
+    "restaurant_id": "store-0042",
+    "order_id": "ORD-2026-000123",
+    "customer_id": "cust-7f3a9c",
+    "subtotal_minor": 25000,
+    "discount_minor": 2500,
+    "tax_minor": 2250,
+    "tip_minor": 1500,
+    "currency": "TRY",
+    "completed_at": "2026-11-05T12:30:00+03:00"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "event_id": "evt_01JC4Z9A7K",
+  "event_type": "order.completed",
+  "order": {
+    "restaurant_id": "store-0042",
+    "order_id": "ORD-2026-000124",
+    "customer_id": null,
+    "subtotal_minor": 8000,
+    "currency": "TRY",
+    "completed_at": "2026-11-05T09:45:00Z"
+  }
+}
