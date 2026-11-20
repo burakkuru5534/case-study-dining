@@ -7,6 +7,8 @@ Signed POS webhooks are verified and stored in an inbox (`202 Accepted`); a
 worker turns each event into an order and, when earned, loyalty points, in a
 single transaction. Loyalty rule: 1 point per 10 TRY of eligible spend.
 
+Design, guarantees, decisions and known issues: [`docs/architecture.md`](docs/architecture.md).
+
 ## Tech Stack
 
 - Go
@@ -104,8 +106,8 @@ The `api` container and `go run ./cmd/api` both use host port 8080; run one at a
 ## Read API
 
 Requires `Authorization: Bearer <token>` (one of `API_READ_TOKENS`); otherwise `401`.
-Customers are addressed by their POS identity (provider, tenant, external customer id);
-internal ids are never exposed. All identities linked to the same customer return the same data.
+Customers are addressed by their POS identity (provider, tenant, external customer id),
+not by internal ids. All identities linked to the same customer return the same data.
 
 **Order history**, newest first (`completed_at`, then insertion order), keyset-paginated:
 
@@ -129,8 +131,9 @@ GET /v1/providers/reference/tenants/chain-istanbul/customers/cust-7f3a9c/orders?
 ```
 
 - `limit`: 1–100, default 20. Pass `next_cursor` back as `cursor` for the next page;
-  `null` means last page. Cursors are opaque; orders arriving while paging never
-  cause skipped or repeated rows.
+  `null` means last page. Treat cursors as opaque (they encode a position, including an
+  internal row id; do not parse or store them). Orders arriving while paging never cause
+  skipped or repeated rows.
 - Amounts are integer minor units plus an ISO 4217 code (no floating point).
 - Guest orders are not attributed to any customer and never appear.
 
