@@ -13,9 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/burakkuru5534/case-study-dining/internal/customerapi"
 	"github.com/burakkuru5534/case-study-dining/internal/ingestion"
 	"github.com/burakkuru5534/case-study-dining/internal/ingestion/reference"
 	"github.com/burakkuru5534/case-study-dining/internal/platform/config"
+	"github.com/burakkuru5534/case-study-dining/internal/platform/httpauth"
 	"github.com/burakkuru5534/case-study-dining/internal/platform/postgres"
 )
 
@@ -66,6 +68,8 @@ func run(logger *slog.Logger) error {
 		},
 	}, ingestion.NewInbox(pool), logger)
 
+	customers := customerapi.NewHandler(pool, logger)
+
 	// Bind synchronously so a port conflict fails fast, before we log "listening".
 	ln, err := net.Listen("tcp", net.JoinHostPort("", strconv.Itoa(cfg.HTTPPort)))
 	if err != nil {
@@ -73,7 +77,11 @@ func run(logger *slog.Logger) error {
 	}
 
 	server := &http.Server{
-		Handler:           newMux(pool, webhooks, logger),
+		Handler: newMux(pool, routes{
+			webhooks:        webhooks,
+			customerOrders:  http.HandlerFunc(customers.Orders),
+			customerLoyalty: http.HandlerFunc(customers.Loyalty),
+		}, cfg.APIReadTokens, logger),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -120,11 +128,24 @@ type pinger interface {
 	Ping(ctx context.Context) error
 }
 
-func newMux(db pinger, webhooks http.Handler, logger *slog.Logger) *http.ServeMux {
+// routes are the application handlers mounted by newMux.
+type routes struct {
+	webhooks        http.Handler
+	customerOrders  http.Handler
+	customerLoyalty http.Handler
+}
+
+// newMux mounts all routes and their authentication:
+//   - /health, /ready: open (infrastructure probes)
+//   - /webhooks/{provider}: HMAC signature, verified inside the handler
+//   - /v1/...: static bearer token
+func newMux(db pinger, h routes, readTokens []string, logger *slog.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady(db, logger))
-	mux.Handle("POST /webhooks/{provider}", webhooks)
+	mux.Handle("POST /webhooks/{provider}", h.webhooks)
+	mux.Handle(customerapi.OrdersPattern, httpauth.RequireBearer(readTokens, h.customerOrders))
+	mux.Handle(customerapi.LoyaltyPattern, httpauth.RequireBearer(readTokens, h.customerLoyalty))
 	return mux
 }
 

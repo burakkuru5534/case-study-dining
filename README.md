@@ -30,7 +30,10 @@ docker compose up -d --build                   # api + worker
 $env:WEBHOOK_SECRET_REFERENCE = 'local-dev-reference-webhook-secret-0123456789'
 go run ./cmd/sendwebhook -file docs/reference-webhook/order_completed.json
 
-docker compose exec postgres psql -U postgres -d dining -c "SELECT ci.external_customer_id, a.balance FROM loyalty_accounts a JOIN customer_identities ci USING (customer_id)"
+$h = @{ Authorization = 'Bearer local-dev-read-token-0123456789abcdef' }
+$c = 'http://localhost:8080/v1/providers/reference/tenants/chain-istanbul/customers/cust-7f3a9c'
+Invoke-RestMethod -Headers $h "$c/loyalty" | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Headers $h "$c/orders"  | ConvertTo-Json -Depth 5
 ```
 
 Bash:
@@ -43,12 +46,14 @@ docker compose up -d --build
 WEBHOOK_SECRET_REFERENCE='local-dev-reference-webhook-secret-0123456789' \
   go run ./cmd/sendwebhook -file docs/reference-webhook/order_completed.json
 
-docker compose exec postgres psql -U postgres -d dining \
-  -c "SELECT ci.external_customer_id, a.balance FROM loyalty_accounts a JOIN customer_identities ci USING (customer_id)"
+TOKEN='local-dev-read-token-0123456789abcdef'
+C='http://localhost:8080/v1/providers/reference/tenants/chain-istanbul/customers/cust-7f3a9c'
+curl -s -H "Authorization: Bearer $TOKEN" "$C/loyalty"
+curl -s -H "Authorization: Bearer $TOKEN" "$C/orders"
 ```
 
-Expected: `cust-7f3a9c | 22` (225.00 TRY eligible → 22 points). Sending the same
-file again changes nothing.
+Expected: balance `22` (225.00 TRY eligible → 22 points) and one order with
+`"points_awarded": 22`. Sending the same file again changes nothing.
 
 - API: `127.0.0.1:8080`
 - PostgreSQL: `127.0.0.1:55432`
@@ -64,6 +69,7 @@ Stop with `docker compose stop` (graceful) or `docker compose down` (`-v` also d
 docker compose up -d postgres
 export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55432/dining?sslmode=disable'
 export WEBHOOK_SECRET_REFERENCE='local-dev-reference-webhook-secret-0123456789'
+export API_READ_TOKENS='local-dev-read-token-0123456789abcdef'
 go run ./cmd/migrate
 go run ./cmd/seed
 go run ./cmd/api      # terminal 1
@@ -79,6 +85,7 @@ The `api` container and `go run ./cmd/api` both use host port 8080; run one at a
 |---|---|---|---|
 | `DATABASE_URL` | all | yes | PostgreSQL connection URL |
 | `WEBHOOK_SECRET_REFERENCE` | api | yes | HMAC secret(s) for the reference provider, ≥ 32 bytes each, comma-separated for rotation |
+| `API_READ_TOKENS` | api | yes | Bearer token(s) for `/v1`, ≥ 32 bytes each, comma-separated for rotation |
 | `APP_ENV` | api, seed | no | `local` \| `test` \| `staging` \| `production`, default `local`; seed refuses `production` |
 | `HTTP_PORT` | api | no | default `8080` |
 | `WORKER_CONCURRENCY` | worker | no | parallel processing loops, 1–64, default `2` |
@@ -91,6 +98,63 @@ The `api` container and `go run ./cmd/api` both use host port 8080; run one at a
 - `GET /ready` — readiness; returns `503` when PostgreSQL is unreachable.
 - `POST /webhooks/{provider}` — signed webhook intake; see
   [`docs/reference-webhook-format.md`](docs/reference-webhook-format.md).
+- `GET /v1/providers/{provider}/tenants/{tenant}/customers/{customer}/orders` — order history.
+- `GET /v1/providers/{provider}/tenants/{tenant}/customers/{customer}/loyalty` — loyalty balances.
+
+## Read API
+
+Requires `Authorization: Bearer <token>` (one of `API_READ_TOKENS`); otherwise `401`.
+Customers are addressed by their POS identity (provider, tenant, external customer id);
+internal ids are never exposed. All identities linked to the same customer return the same data.
+
+**Order history**, newest first (`completed_at`, then insertion order), keyset-paginated:
+
+```
+GET /v1/providers/reference/tenants/chain-istanbul/customers/cust-7f3a9c/orders?limit=20
+```
+
+```json
+{
+  "orders": [{
+    "restaurant_id": "store-0042",
+    "order_id": "ORD-2026-000123",
+    "eligible_amount_minor": 22500,
+    "currency": "TRY",
+    "completed_at": "2026-11-05T09:30:00Z",
+    "loyalty_status": "awarded",
+    "points_awarded": 22
+  }],
+  "next_cursor": null
+}
+```
+
+- `limit`: 1–100, default 20. Pass `next_cursor` back as `cursor` for the next page;
+  `null` means last page. Cursors are opaque; orders arriving while paging never
+  cause skipped or repeated rows.
+- Amounts are integer minor units plus an ISO 4217 code (no floating point).
+- Guest orders are not attributed to any customer and never appear.
+
+**Loyalty balances**, one per program the customer has earned in:
+
+```
+GET /v1/providers/reference/tenants/chain-istanbul/customers/cust-7f3a9c/loyalty
+```
+
+```json
+{ "balances": [{ "program_id": 1, "program_name": "Default TRY (1 point per 10 TRY)",
+                 "balance": 22, "updated_at": "2026-11-20T10:30:00Z" }] }
+```
+
+| Status | Meaning |
+|---|---|
+| `200` | OK (known customer without orders or points: empty list) |
+| `400` | invalid `limit`, `cursor` or path identifier |
+| `401` | missing or invalid bearer token |
+| `404` | no customer with this identity |
+| `503` | temporarily unavailable; details are only logged |
+
+The static token is a placeholder: any valid token can read any tenant. Production
+would use per-client authentication (OAuth / mTLS) with tenant-scoped authorization.
 
 ## Event processing
 

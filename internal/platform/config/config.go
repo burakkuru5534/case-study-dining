@@ -34,6 +34,10 @@ type Config struct {
 	// reference provider. More than one allows rotation without downtime:
 	// add the new secret, switch the sender, then remove the old one.
 	WebhookSecretsReference []string
+
+	// APIReadTokens are the accepted bearer tokens for the read API
+	// (/v1/...). Several values allow rotation without downtime.
+	APIReadTokens []string
 }
 
 // Load reads the API configuration from the process environment.
@@ -96,6 +100,12 @@ func load(getenv func(string) string) (Config, error) {
 		errs = append(errs, err)
 	}
 	cfg.WebhookSecretsReference = secrets
+
+	tokens, err := parseSecrets("API_READ_TOKENS", getenv("API_READ_TOKENS"))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.APIReadTokens = tokens
 
 	if err := errors.Join(errs...); err != nil {
 		return Config{}, fmt.Errorf("invalid configuration: %w", err)

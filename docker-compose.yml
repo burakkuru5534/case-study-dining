@@ -42,6 +42,8 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/dining?sslmode=disable
       # Local development only. Comma-separate several values to rotate secrets.
       WEBHOOK_SECRET_REFERENCE: local-dev-reference-webhook-secret-0123456789
+      # Bearer token(s) for the read API (/v1). Local development only.
+      API_READ_TOKENS: local-dev-read-token-0123456789abcdef
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

@@ -17,6 +17,19 @@ var webhookStub = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) 
 	_, _ = w.Write([]byte(`{"provider":"` + r.PathValue("provider") + `"}`))
 })
 
+const testReadToken = "main-test-read-token-0123456789abcdef"
+
+var readStub = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"read":true}`))
+})
+
+func testMux(db pinger) *http.ServeMux {
+	return newMux(db, routes{webhooks: webhookStub, customerOrders: readStub, customerLoyalty: readStub},
+		[]string{testReadToken}, slog.New(slog.DiscardHandler))
+}
+
 // fakePinger returns err, or blocks until ctx is done when block is true.
 type fakePinger struct {
 	err   error
@@ -39,6 +52,7 @@ func TestRoutes(t *testing.T) {
 		db         fakePinger
 		method     string
 		path       string
+		token      string
 		wantStatus int
 		wantBody   string
 	}{
@@ -62,6 +76,13 @@ func TestRoutes(t *testing.T) {
 		{name: "webhook POST is routed with provider", method: http.MethodPost, path: "/webhooks/reference", wantStatus: http.StatusAccepted, wantBody: `{"provider":"reference"}`},
 		{name: "webhook GET is not allowed", method: http.MethodGet, path: "/webhooks/reference", wantStatus: http.StatusMethodNotAllowed},
 		{name: "webhook without provider is not found", method: http.MethodPost, path: "/webhooks/", wantStatus: http.StatusNotFound},
+		{name: "webhooks need no bearer token (HMAC instead)", method: http.MethodPost, path: "/webhooks/reference", wantStatus: http.StatusAccepted},
+		{name: "orders without token", method: http.MethodGet, path: "/v1/providers/p/tenants/t/customers/c/orders", wantStatus: http.StatusUnauthorized},
+		{name: "loyalty without token", method: http.MethodGet, path: "/v1/providers/p/tenants/t/customers/c/loyalty", wantStatus: http.StatusUnauthorized},
+		{name: "orders with token", method: http.MethodGet, path: "/v1/providers/p/tenants/t/customers/c/orders", token: testReadToken, wantStatus: http.StatusOK, wantBody: `{"read":true}`},
+		{name: "loyalty with token", method: http.MethodGet, path: "/v1/providers/p/tenants/t/customers/c/loyalty", token: testReadToken, wantStatus: http.StatusOK, wantBody: `{"read":true}`},
+		{name: "orders with wrong token", method: http.MethodGet, path: "/v1/providers/p/tenants/t/customers/c/orders", token: "wrong-token-0123456789abcdef0123456789", wantStatus: http.StatusUnauthorized},
+		{name: "health needs no token", method: http.MethodGet, path: "/health", wantStatus: http.StatusOK, wantBody: `{"status":"ok"}`},
 	}
 
 	for _, tt := range tests {
@@ -71,14 +92,17 @@ func TestRoutes(t *testing.T) {
 			// Go through the mux, not the handler directly, so routing and
 			// method matching are covered too.
 			req := httptest.NewRequest(tt.method, tt.path, nil)
+			if tt.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.token)
+			}
 			rec := httptest.NewRecorder()
 
-			newMux(tt.db, webhookStub, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+			testMux(tt.db).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status: got %d, want %d", rec.Code, tt.wantStatus)
 			}
-			if tt.wantStatus == http.StatusMethodNotAllowed || tt.wantStatus == http.StatusNotFound {
+			if tt.wantStatus == http.StatusMethodNotAllowed || tt.wantStatus == http.StatusNotFound || tt.wantStatus == http.StatusUnauthorized {
 				return
 			}
 			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
@@ -98,7 +122,7 @@ func TestReadyIsBoundedByTimeout(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	start := time.Now()
-	newMux(fakePinger{block: true}, webhookStub, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+	testMux(fakePinger{block: true}).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if rec.Code != http.StatusServiceUnavailable {

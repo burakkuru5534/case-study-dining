@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -120,4 +121,60 @@ func AwardEarn(ctx context.Context, tx pgx.Tx, e Earn) error {
 		return fmt.Errorf("append ledger: %w", err)
 	}
 	return nil
+}
+
+// Querier is satisfied by *pgxpool.Pool, *pgx.Conn and pgx.Tx.
+type Querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// ErrCustomerNotFound means no customer has this provider identity.
+var ErrCustomerNotFound = errors.New("customer not found")
+
+// FindCustomer resolves a provider identity to the internal customer, read-only.
+func FindCustomer(ctx context.Context, q Querier, provider, tenantRef, externalCustomerID string) (int64, error) {
+	var id int64
+	err := q.QueryRow(ctx, `
+		SELECT customer_id FROM customer_identities
+		WHERE provider = $1 AND tenant_ref = $2 AND external_customer_id = $3`,
+		provider, tenantRef, externalCustomerID).Scan(&id)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return 0, ErrCustomerNotFound
+	case err != nil:
+		return 0, fmt.Errorf("find customer: %w", err)
+	}
+	return id, nil
+}
+
+// Balance is a customer's balance in one loyalty program.
+type Balance struct {
+	ProgramID   int64
+	ProgramName string
+	Balance     int64
+	UpdatedAt   time.Time
+}
+
+// Balances returns the customer's balance in every program they have earned in.
+func Balances(ctx context.Context, q Querier, customerID int64) ([]Balance, error) {
+	rows, err := q.Query(ctx, `
+		SELECT p.id, p.name, a.balance, a.updated_at
+		FROM loyalty_accounts a
+		JOIN loyalty_programs p ON p.id = a.loyalty_program_id
+		WHERE a.customer_id = $1
+		ORDER BY p.id`, customerID)
+	if err != nil {
+		return nil, fmt.Errorf("list balances: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Balance, error) {
+		var b Balance
+		err := row.Scan(&b.ProgramID, &b.ProgramName, &b.Balance, &b.UpdatedAt)
+		b.UpdatedAt = b.UpdatedAt.UTC()
+		return b, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list balances: %w", err)
+	}
+	return out, nil
 }

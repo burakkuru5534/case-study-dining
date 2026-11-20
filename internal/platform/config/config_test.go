@@ -11,12 +11,13 @@ const (
 	testDBURL   = "postgres://u:p@db:5432/dining"
 	testSecret  = "0123456789abcdef0123456789abcdef" // exactly 32 bytes
 	testSecret2 = "fedcba9876543210fedcba9876543210"
+	testToken   = "read-token-0123456789abcdef0123456789"
 )
 
 // withRequired returns env with valid DATABASE_URL and webhook secret added,
 // so cases that test other variables don't have to repeat them.
 func withRequired(env map[string]string) map[string]string {
-	out := map[string]string{"DATABASE_URL": testDBURL, "WEBHOOK_SECRET_REFERENCE": testSecret}
+	out := map[string]string{"DATABASE_URL": testDBURL, "WEBHOOK_SECRET_REFERENCE": testSecret, "API_READ_TOKENS": testToken}
 	for k, v := range env {
 		out[k] = v
 	}
@@ -27,7 +28,7 @@ func cfg(appEnv string, port int, secrets ...string) Config {
 	if len(secrets) == 0 {
 		secrets = []string{testSecret}
 	}
-	return Config{AppEnv: appEnv, HTTPPort: port, DatabaseURL: testDBURL, WebhookSecretsReference: secrets}
+	return Config{AppEnv: appEnv, HTTPPort: port, DatabaseURL: testDBURL, WebhookSecretsReference: secrets, APIReadTokens: []string{testToken}}
 }
 
 func TestLoad(t *testing.T) {
@@ -50,9 +51,11 @@ func TestLoad(t *testing.T) {
 			want: cfg(EnvLocal, 8080, testSecret, testSecret2),
 		},
 
-		{name: "missing database url", env: map[string]string{"WEBHOOK_SECRET_REFERENCE": testSecret}, wantErr: []string{"DATABASE_URL", "required"}},
+		{name: "missing database url", env: withRequired(map[string]string{"DATABASE_URL": ""}), wantErr: []string{"DATABASE_URL", "required"}},
+		{name: "missing read token", env: withRequired(map[string]string{"API_READ_TOKENS": ""}), wantErr: []string{"API_READ_TOKENS: required"}},
+		{name: "short read token", env: withRequired(map[string]string{"API_READ_TOKENS": "short"}), wantErr: []string{"API_READ_TOKENS: entry 1 is shorter than 32 bytes"}},
 		{name: "empty database url", env: withRequired(map[string]string{"DATABASE_URL": ""}), wantErr: []string{"DATABASE_URL", "required"}},
-		{name: "missing webhook secret", env: map[string]string{"DATABASE_URL": testDBURL}, wantErr: []string{"WEBHOOK_SECRET_REFERENCE: required"}},
+		{name: "missing webhook secret", env: withRequired(map[string]string{"WEBHOOK_SECRET_REFERENCE": ""}), wantErr: []string{"WEBHOOK_SECRET_REFERENCE: required"}},
 		{name: "short webhook secret", env: withRequired(map[string]string{"WEBHOOK_SECRET_REFERENCE": "too-short"}), wantErr: []string{"WEBHOOK_SECRET_REFERENCE: entry 1 is shorter than 32 bytes"}},
 		{name: "empty entry in secret list", env: withRequired(map[string]string{"WEBHOOK_SECRET_REFERENCE": testSecret + ","}), wantErr: []string{"WEBHOOK_SECRET_REFERENCE: entry 2 is empty"}},
 		{name: "short second secret", env: withRequired(map[string]string{"WEBHOOK_SECRET_REFERENCE": testSecret + ",short"}), wantErr: []string{"entry 2 is shorter"}},
@@ -65,7 +68,7 @@ func TestLoad(t *testing.T) {
 		{
 			name:    "all errors are reported together",
 			env:     map[string]string{"APP_ENV": "dev", "HTTP_PORT": "x"},
-			wantErr: []string{"APP_ENV", "HTTP_PORT", "DATABASE_URL", "WEBHOOK_SECRET_REFERENCE"},
+			wantErr: []string{"APP_ENV", "HTTP_PORT", "DATABASE_URL", "WEBHOOK_SECRET_REFERENCE", "API_READ_TOKENS"},
 		},
 	}
 
