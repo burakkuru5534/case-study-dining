@@ -25,6 +25,7 @@ const (
 	checkViolation      = "23514"
 	foreignKeyViolation = "23503"
 	restrictViolation   = "23001"
+	lockNotAvailable    = "55P03"
 )
 
 // ---- harness ----
@@ -607,4 +608,97 @@ func processOne(ctx context.Context, db *pgxpool.Pool, f fixture) (done bool, er
 		return false, err
 	}
 	return false, tx.Commit(ctx)
+}
+
+// ---- restaurant program lock (0003) ----
+
+const insertOrderTx = `INSERT INTO orders (restaurant_id, loyalty_program_id, external_order_id, customer_id,
+		eligible_amount_minor, currency, completed_at, loyalty_status, source_event_id)
+	VALUES ($1, $2, $3, $4, 12345, 'TRY', now(), 'awarded', $5)`
+
+// An open order transaction holds FOR SHARE on its restaurant: a program
+// change must wait until the order commits.
+func TestSchema_ProgramChangeWaitsForOpenOrderTransaction(t *testing.T) {
+	db := newSchemaDB(t)
+	ctx := context.Background()
+	f := setup(t, db)
+	newProg := newProgram(t, db)
+	ev := newEvent(t, db, "ev-lock-1")
+
+	orderTx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = orderTx.Rollback(ctx) }()
+	if _, err := orderTx.Exec(ctx, insertOrderTx, f.restaurant, f.program, "o-lock-1", f.customer, ev); err != nil {
+		t.Fatalf("insert order: %v", err)
+	}
+
+	adminTx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Must be released on every path: a leaked open transaction keeps its
+	// connection, and pool cleanup would then block forever instead of failing.
+	defer func() { _ = adminTx.Rollback(ctx) }()
+	if _, err := adminTx.Exec(ctx, "SET LOCAL lock_timeout = '200ms'"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = adminTx.Exec(ctx, `UPDATE restaurants SET loyalty_program_id = $1 WHERE id = $2`, newProg, f.restaurant)
+	expectCode(t, err, lockNotAvailable)
+	_ = adminTx.Rollback(ctx)
+
+	if err := orderTx.Commit(ctx); err != nil {
+		t.Fatalf("commit order: %v", err)
+	}
+
+	// Lock released with the commit: the change now goes through.
+	mustExec(t, db, `UPDATE restaurants SET loyalty_program_id = $1 WHERE id = $2`, newProg, f.restaurant)
+}
+
+// An in-progress program change blocks the order's check; once the change
+// commits, an order carrying the old program is rejected.
+func TestSchema_OrderWaitsForProgramChangeThenIsRejected(t *testing.T) {
+	db := newSchemaDB(t)
+	ctx := context.Background()
+	f := setup(t, db)
+	newProg := newProgram(t, db)
+	ev := newEvent(t, db, "ev-lock-2")
+
+	adminTx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = adminTx.Rollback(ctx) }()
+	if _, err := adminTx.Exec(ctx, `UPDATE restaurants SET loyalty_program_id = $1 WHERE id = $2`, newProg, f.restaurant); err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		// Uses the program the worker would have read before the change.
+		_, err := db.Exec(ctx, insertOrderTx, f.restaurant, f.program, "o-lock-2", f.customer, ev)
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		t.Fatalf("order insert did not wait for the program change (err=%v)", err)
+	case <-time.After(300 * time.Millisecond):
+		// Still blocked, as expected.
+	}
+
+	if err := adminTx.Commit(ctx); err != nil {
+		t.Fatalf("commit program change: %v", err)
+	}
+
+	select {
+	case err := <-result:
+		expectCode(t, err, checkViolation)
+	case <-time.After(5 * time.Second):
+		t.Fatal("order insert still blocked after the program change committed")
+	}
+	if n := count(t, db, `SELECT count(*) FROM orders WHERE external_order_id = 'o-lock-2'`); n != 0 {
+		t.Fatalf("orders with stale program = %d, want 0", n)
+	}
 }
