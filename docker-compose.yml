@@ -53,5 +53,24 @@ services:
     # can cut graceful shutdown short.
     stop_grace_period: 15s
 
+  # Processes pending webhook events. Safe to scale: docker compose up -d --scale worker=3
+  worker:
+    build: .
+    image: case-study-dining:local
+    entrypoint: ["/worker"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/dining?sslmode=disable
+      WORKER_CONCURRENCY: "2"
+      WORKER_POLL_INTERVAL: 1s
+      WORKER_MAX_ATTEMPTS: "10"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Must exceed the worker's per-event timeout (30s): in-flight events finish on SIGTERM.
+    stop_grace_period: 45s
+
 volumes:
   postgres-data:

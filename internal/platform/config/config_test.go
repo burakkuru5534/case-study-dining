@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -111,5 +112,66 @@ func TestLoadErrorsDoNotLeakSecrets(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), leaked) || strings.Contains(err.Error(), testSecret) {
 		t.Fatalf("error leaks a secret: %v", err)
+	}
+}
+
+func TestLoadWorker(t *testing.T) {
+	t.Parallel()
+
+	db := map[string]string{"DATABASE_URL": testDBURL}
+	with := func(kv map[string]string) map[string]string {
+		out := map[string]string{"DATABASE_URL": testDBURL}
+		for k, v := range kv {
+			out[k] = v
+		}
+		return out
+	}
+	def := WorkerConfig{DatabaseURL: testDBURL, Concurrency: 2, PollInterval: time.Second, MaxAttempts: 10}
+
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    WorkerConfig
+		wantErr []string
+	}{
+		{name: "defaults", env: db, want: def},
+		{name: "does not need webhook secrets", env: db, want: def},
+		{name: "explicit values", env: with(map[string]string{"WORKER_CONCURRENCY": "8", "WORKER_POLL_INTERVAL": "250ms", "WORKER_MAX_ATTEMPTS": "5"}),
+			want: WorkerConfig{DatabaseURL: testDBURL, Concurrency: 8, PollInterval: 250 * time.Millisecond, MaxAttempts: 5}},
+		{name: "bounds", env: with(map[string]string{"WORKER_CONCURRENCY": "64", "WORKER_POLL_INTERVAL": "10ms", "WORKER_MAX_ATTEMPTS": "1"}),
+			want: WorkerConfig{DatabaseURL: testDBURL, Concurrency: 64, PollInterval: 10 * time.Millisecond, MaxAttempts: 1}},
+
+		{name: "missing database url", env: map[string]string{}, wantErr: []string{"DATABASE_URL: required"}},
+		{name: "concurrency zero", env: with(map[string]string{"WORKER_CONCURRENCY": "0"}), wantErr: []string{"WORKER_CONCURRENCY", "out of range"}},
+		{name: "concurrency too high", env: with(map[string]string{"WORKER_CONCURRENCY": "65"}), wantErr: []string{"WORKER_CONCURRENCY"}},
+		{name: "concurrency not a number", env: with(map[string]string{"WORKER_CONCURRENCY": "two"}), wantErr: []string{"WORKER_CONCURRENCY", "not a valid integer"}},
+		{name: "poll interval without unit", env: with(map[string]string{"WORKER_POLL_INTERVAL": "500"}), wantErr: []string{"WORKER_POLL_INTERVAL", "not a duration"}},
+		{name: "poll interval too short", env: with(map[string]string{"WORKER_POLL_INTERVAL": "1ms"}), wantErr: []string{"WORKER_POLL_INTERVAL", "out of range"}},
+		{name: "max attempts zero", env: with(map[string]string{"WORKER_MAX_ATTEMPTS": "0"}), wantErr: []string{"WORKER_MAX_ATTEMPTS"}},
+		{name: "all errors together", env: map[string]string{"WORKER_CONCURRENCY": "x", "WORKER_MAX_ATTEMPTS": "y"},
+			wantErr: []string{"DATABASE_URL", "WORKER_CONCURRENCY", "WORKER_MAX_ATTEMPTS"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := loadWorker(func(k string) string { return tt.env[k] })
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Fatalf("expected error, got %+v", got)
+				}
+				for _, s := range tt.wantErr {
+					if !strings.Contains(err.Error(), s) {
+						t.Errorf("error %q does not contain %q", err, s)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }

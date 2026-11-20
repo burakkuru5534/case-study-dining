@@ -252,7 +252,7 @@ func (p *Processor) recordFailure(ctx context.Context, tx pgx.Tx, ev claimedEven
 	}
 
 	delay := p.cfg.Backoff.Delay(attempts)
-	log.Warn("event processing failed, will retry", "attempts", attempts, "retry_in", delay, "error", msg)
+	log.Warn("event processing failed, will retry", "attempts", attempts, "retry_in", delay.String(), "error", msg)
 	_, err := tx.Exec(ctx, `
 		UPDATE webhook_events
 		SET attempts = $2, next_attempt_at = now() + $3 * interval '1 millisecond',

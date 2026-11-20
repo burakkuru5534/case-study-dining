@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -121,4 +122,69 @@ func parseSecrets(name, raw string) ([]string, error) {
 		secrets = append(secrets, p)
 	}
 	return secrets, nil
+}
+
+// WorkerConfig holds the configuration of the event worker process.
+type WorkerConfig struct {
+	DatabaseURL  string
+	Concurrency  int
+	PollInterval time.Duration
+	MaxAttempts  int
+}
+
+// LoadWorker reads the worker configuration. The worker needs no webhook secrets.
+func LoadWorker() (WorkerConfig, error) {
+	return loadWorker(os.Getenv)
+}
+
+func loadWorker(getenv func(string) string) (WorkerConfig, error) {
+	cfg := WorkerConfig{
+		DatabaseURL:  getenv("DATABASE_URL"),
+		Concurrency:  2,
+		PollInterval: time.Second,
+		MaxAttempts:  10,
+	}
+	var errs []error
+
+	if cfg.DatabaseURL == "" {
+		errs = append(errs, errors.New("DATABASE_URL: required"))
+	}
+	if v := getenv("WORKER_CONCURRENCY"); v != "" {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("WORKER_CONCURRENCY: %q is not a valid integer", v))
+		case n < 1 || n > 64:
+			errs = append(errs, fmt.Errorf("WORKER_CONCURRENCY: %d is out of range 1-64", n))
+		default:
+			cfg.Concurrency = n
+		}
+	}
+	if v := getenv("WORKER_POLL_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("WORKER_POLL_INTERVAL: %q is not a duration (e.g. 500ms, 2s)", v))
+		case d < 10*time.Millisecond || d > time.Minute:
+			errs = append(errs, fmt.Errorf("WORKER_POLL_INTERVAL: %s is out of range 10ms-1m", d))
+		default:
+			cfg.PollInterval = d
+		}
+	}
+	if v := getenv("WORKER_MAX_ATTEMPTS"); v != "" {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("WORKER_MAX_ATTEMPTS: %q is not a valid integer", v))
+		case n < 1 || n > 100:
+			errs = append(errs, fmt.Errorf("WORKER_MAX_ATTEMPTS: %d is out of range 1-100", n))
+		default:
+			cfg.MaxAttempts = n
+		}
+	}
+
+	if err := errors.Join(errs...); err != nil {
+		return WorkerConfig{}, fmt.Errorf("invalid worker configuration: %w", err)
+	}
+	return cfg, nil
 }
