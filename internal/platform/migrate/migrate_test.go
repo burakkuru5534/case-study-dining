@@ -303,20 +303,26 @@ func TestRun_ReleasesLockAfterRun(t *testing.T) {
 	ctx := context.Background()
 
 	runner := db.conn()
+	var runnerPID int32
+	if err := runner.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&runnerPID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Run(ctx, runner, []Migration{{Version: 1, Name: "x", SQL: "SELECT 1;"}}, discard); err != nil {
 		t.Fatal(err)
 	}
 
-	// The runner connection is still open: if the lock were leaked, this would be false.
-	var got bool
-	other := db.conn()
-	if err := other.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockKey).Scan(&got); err != nil {
+	// The runner connection is still open: if Run leaked the lock, its session
+	// would still hold it. Check that session specifically. "Is the lock free?"
+	// would be wrong here: go test runs packages in parallel, and other
+	// packages' integration tests take the same database-wide lock.
+	var held int
+	if err := db.conn().QueryRow(ctx,
+		"SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = $1", runnerPID).Scan(&held); err != nil {
 		t.Fatal(err)
 	}
-	if !got {
-		t.Fatal("lock still held after Run returned")
+	if held != 0 {
+		t.Fatalf("runner session still holds %d advisory lock(s) after Run returned", held)
 	}
-	_, _ = other.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockKey)
 }
 
 func TestRun_WaitingForLockRespectsContext(t *testing.T) {

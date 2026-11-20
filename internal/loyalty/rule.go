@@ -20,8 +20,13 @@ const (
 	StatusBelowMinimum        Status = "below_minimum"
 )
 
-// ErrPointsOverflow is returned when the points would not fit in an int64.
-var ErrPointsOverflow = errors.New("loyalty: points calculation overflows int64")
+// Errors returned by Evaluate. All of them mean the inputs can never produce
+// a valid result, so callers treat them as permanent (not retryable).
+var (
+	ErrPointsOverflow  = errors.New("loyalty: points calculation overflows int64")
+	ErrInvalidRule     = errors.New("loyalty: invalid rule")
+	ErrInvalidPurchase = errors.New("loyalty: invalid purchase")
+)
 
 var currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 
@@ -62,10 +67,10 @@ type Purchase struct {
 // Points are non-zero only for StatusAwarded.
 func Evaluate(r Rule, p Purchase) (int64, Status, error) {
 	if err := r.Validate(); err != nil {
-		return 0, "", fmt.Errorf("invalid rule: %w", err)
+		return 0, "", fmt.Errorf("%w: %w", ErrInvalidRule, err)
 	}
 	if p.EligibleAmountMinor < 0 {
-		return 0, "", errors.New("eligible amount must not be negative")
+		return 0, "", fmt.Errorf("%w: eligible amount must not be negative", ErrInvalidPurchase)
 	}
 
 	switch {

@@ -76,14 +76,14 @@ func TestEvaluateErrors(t *testing.T) {
 		wantErr  string
 		wantIs   error
 	}{
-		{"zero earn unit", Rule{"TRY", 0, 1}, ok, "earn_unit_minor", nil},
-		{"negative earn unit", Rule{"TRY", -1000, 1}, ok, "earn_unit_minor", nil},
-		{"zero points per unit", Rule{"TRY", 1000, 0}, ok, "points_per_unit", nil},
-		{"negative points per unit", Rule{"TRY", 1000, -1}, ok, "points_per_unit", nil},
-		{"invalid rule currency", Rule{"tl", 1000, 1}, ok, "rule currency", nil},
-		{"empty rule currency", Rule{"", 1000, 1}, ok, "rule currency", nil},
-		{"negative amount", tenTRY, Purchase{HasCustomer: true, Currency: "TRY", EligibleAmountMinor: -1}, "negative", nil},
-		{"rule invalid even for guest", Rule{"TRY", 0, 1}, Purchase{HasCustomer: false, Currency: "TRY"}, "earn_unit_minor", nil},
+		{"zero earn unit", Rule{"TRY", 0, 1}, ok, "earn_unit_minor", ErrInvalidRule},
+		{"negative earn unit", Rule{"TRY", -1000, 1}, ok, "earn_unit_minor", ErrInvalidRule},
+		{"zero points per unit", Rule{"TRY", 1000, 0}, ok, "points_per_unit", ErrInvalidRule},
+		{"negative points per unit", Rule{"TRY", 1000, -1}, ok, "points_per_unit", ErrInvalidRule},
+		{"invalid rule currency", Rule{"tl", 1000, 1}, ok, "rule currency", ErrInvalidRule},
+		{"empty rule currency", Rule{"", 1000, 1}, ok, "rule currency", ErrInvalidRule},
+		{"negative amount", tenTRY, Purchase{HasCustomer: true, Currency: "TRY", EligibleAmountMinor: -1}, "negative", ErrInvalidPurchase},
+		{"rule invalid even for guest", Rule{"TRY", 0, 1}, Purchase{HasCustomer: false, Currency: "TRY"}, "earn_unit_minor", ErrInvalidRule},
 		{
 			name:     "multiplication overflow",
 			rule:     Rule{"TRY", 1, 2},
