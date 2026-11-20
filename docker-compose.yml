@@ -40,6 +40,8 @@ services:
       HTTP_PORT: "8080"
       # Service name and container port: 55432 only exists on the host.
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/dining?sslmode=disable
+      # Local development only. Comma-separate several values to rotate secrets.
+      WEBHOOK_SECRET_REFERENCE: local-dev-reference-webhook-secret-0123456789
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

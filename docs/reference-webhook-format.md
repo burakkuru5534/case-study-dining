@@ -79,16 +79,52 @@ what the adapter accepts.
   the integration. **Missing required fields** are rejected.
 - **Trailing data** after the JSON object is rejected.
 
+## Endpoint and authentication
+
+`POST /webhooks/reference`, body at most 1 MiB.
+
+Every request is signed with a shared secret (HMAC-SHA256):
+
+```
+X-Signature-Timestamp: <unix seconds>
+X-Signature: v1=<hex(HMAC-SHA256(secret, "<timestamp>" + "." + <raw body bytes>))>
+```
+
+- The signature covers the **exact raw bytes** of the body, not a re-serialized JSON.
+- The timestamp must be within **±5 minutes** of the server clock. Replays inside
+  that window are harmless: `event_id` deduplication stores each event once.
+- `X-Signature` may contain several comma-separated `v1=` entries (for example
+  while rotating secrets). The request is valid if any entry matches any accepted secret.
+- The signature is verified **before** the body is parsed; an unsigned or
+  mis-signed request never reaches validation.
+
+Example with OpenSSL:
+
+```bash
+ts=$(date +%s)
+sig=$({ printf '%s.' "$ts"; cat order_completed.json; } | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')
+curl -X POST http://localhost:8080/webhooks/reference \
+  -H "X-Signature-Timestamp: $ts" -H "X-Signature: v1=$sig" \
+  --data-binary @order_completed.json
+```
+
+Sign exactly the bytes you send, including any trailing newline.
+`cmd/sendwebhook` does this for you.
+
 ## Responses
 
-| Situation | HTTP status |
-|---|---|
-| Valid, verified `order.completed` event stored (or already stored) | `202 Accepted` |
-| Valid, verified event of an unsupported type | `200 OK` (not stored) |
-| Malformed or invalid payload | `422 Unprocessable Entity` (not stored) |
+| Situation | HTTP status | Body |
+|---|---|---|
+| Valid `order.completed` event stored | `202 Accepted` | `{"status":"accepted","duplicate":false}` |
+| Same event delivered again | `202 Accepted` | `{"status":"accepted","duplicate":true}` |
+| Valid event of an unsupported type | `200 OK` (not stored) | `{"status":"ignored"}` |
+| Missing or invalid signature, stale timestamp | `401 Unauthorized` | `{"error":"invalid_signature"}` |
+| Body larger than 1 MiB | `413 Content Too Large` | `{"error":"body_too_large"}` |
+| Malformed or invalid payload | `422 Unprocessable Entity` (not stored) | `{"error":"invalid_payload","details":[…]}` |
+| Temporary server-side failure | `503 Service Unavailable` | `{"error":"temporarily_unavailable"}` — retry |
 
-Authentication (request signing) is specified together with the intake
-endpoint. Signatures are always verified before the payload is parsed.
+`details` lists the invalid fields by name; it never echoes payload values.
+Senders should retry on `503` and network errors, and must not retry `401`, `413` or `422`.
 
 ## Loyalty outcome
 

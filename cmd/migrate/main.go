@@ -34,7 +34,8 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
-	cfg, err := config.Load()
+	// Only the database URL: migrate must not depend on API settings such as webhook secrets.
+	databaseURL, err := config.LoadDatabaseURL()
 	if err != nil {
 		return err
 	}
@@ -54,7 +55,7 @@ func run(logger *slog.Logger) error {
 
 	// A dedicated connection, not a pool: the advisory lock is tied to this session,
 	// and closing it releases the lock even if the explicit unlock fails.
-	conn, err := pgx.Connect(connectCtx, cfg.DatabaseURL)
+	conn, err := pgx.Connect(connectCtx, databaseURL)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}

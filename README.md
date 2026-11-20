@@ -38,6 +38,7 @@ Bash:
 
 ```bash
 export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55432/dining?sslmode=disable'
+export WEBHOOK_SECRET_REFERENCE='local-dev-reference-webhook-secret-0123456789'
 go run ./cmd/migrate
 go run ./cmd/api
 ```
@@ -46,9 +47,46 @@ PowerShell:
 
 ```powershell
 $env:DATABASE_URL = 'postgres://postgres:postgres@127.0.0.1:55432/dining?sslmode=disable'
+$env:WEBHOOK_SECRET_REFERENCE = 'local-dev-reference-webhook-secret-0123456789'
 go run ./cmd/migrate
 go run ./cmd/api
 ```
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | yes | PostgreSQL connection URL |
+| `WEBHOOK_SECRET_REFERENCE` | yes (API) | HMAC secret(s) for the reference provider, ≥ 32 bytes each, comma-separated for rotation |
+| `APP_ENV` | no | `local` \| `test` \| `staging` \| `production`, default `local` |
+| `HTTP_PORT` | no | default `8080` |
+
+`cmd/migrate` needs only `DATABASE_URL`.
+
+The `api` container and `go run` both use host port 8080; run one at a time.
+
+## Endpoints
+
+- `GET /health` — liveness; does not check dependencies.
+- `GET /ready` — readiness; returns `503` when PostgreSQL is unreachable.
+- `POST /webhooks/{provider}` — signed webhook intake; see
+  [`docs/reference-webhook-format.md`](docs/reference-webhook-format.md).
+
+Accepted events are stored as `pending` in `webhook_events` and processed asynchronously.
+
+## Send a test webhook
+
+`cmd/sendwebhook` signs a JSON file and posts it (uses `WEBHOOK_SECRET_REFERENCE`):
+
+```bash
+go run ./cmd/sendwebhook -file docs/reference-webhook/order_completed.json
+# same event again → 202 with "duplicate": true
+go run ./cmd/sendwebhook -file docs/reference-webhook/order_completed.json
+# new event id and order id
+go run ./cmd/sendwebhook -file docs/reference-webhook/order_completed.json -event-id evt-2 -order-id ORD-2
+# stale signature → 401
+go run ./cmd/sendwebhook -file docs/reference-webhook/order_completed.json -timestamp-offset -10m
+```
+
+Against the Docker stack, set `WEBHOOK_SECRET_REFERENCE` to the value in `docker-compose.yml` first.
 
 ## Migrations
 
@@ -58,22 +96,13 @@ go run ./cmd/api
 - Each migration runs in its own transaction, so statements that cannot run in a transaction (e.g. `CREATE INDEX CONCURRENTLY`) are not supported.
 - Concurrent runs are serialized with a PostgreSQL advisory lock.
 
-Optional: `APP_ENV` (`local` | `test` | `staging` | `production`, default `local`) and `HTTP_PORT` (default `8080`).
-
-The `api` container and `go run` both use host port 8080; run one at a time.
-
-## Endpoints
-
-- `GET /health` — liveness; does not check dependencies.
-- `GET /ready` — readiness; returns `503` when PostgreSQL is unreachable.
-
 ## Test
 
 ```bash
 go test ./...
 ```
 
-Include the PostgreSQL integration test (requires `docker compose up -d postgres`):
+Include the PostgreSQL integration tests (requires `docker compose up -d postgres`):
 
 ```bash
 TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55432/dining?sslmode=disable' go test ./...

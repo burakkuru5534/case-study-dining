@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/burakkuru5534/case-study-dining/internal/ingestion"
+	"github.com/burakkuru5534/case-study-dining/internal/ingestion/reference"
 	"github.com/burakkuru5534/case-study-dining/internal/platform/config"
 	"github.com/burakkuru5534/case-study-dining/internal/platform/postgres"
 )
@@ -57,6 +59,13 @@ func run(logger *slog.Logger) error {
 	connCfg := pool.Config().ConnConfig
 	logger.Info("connected to database", "host", connCfg.Host, "port", connCfg.Port, "database", connCfg.Database)
 
+	webhooks := ingestion.NewHandler(map[string]ingestion.Provider{
+		reference.ProviderName: {
+			Verifier: reference.Verifier{Secrets: toBytes(cfg.WebhookSecretsReference)},
+			Adapter:  reference.Adapter{},
+		},
+	}, ingestion.NewInbox(pool), logger)
+
 	// Bind synchronously so a port conflict fails fast, before we log "listening".
 	ln, err := net.Listen("tcp", net.JoinHostPort("", strconv.Itoa(cfg.HTTPPort)))
 	if err != nil {
@@ -64,7 +73,7 @@ func run(logger *slog.Logger) error {
 	}
 
 	server := &http.Server{
-		Handler:           newMux(pool, logger),
+		Handler:           newMux(pool, webhooks, logger),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -111,11 +120,20 @@ type pinger interface {
 	Ping(ctx context.Context) error
 }
 
-func newMux(db pinger, logger *slog.Logger) *http.ServeMux {
+func newMux(db pinger, webhooks http.Handler, logger *slog.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady(db, logger))
+	mux.Handle("POST /webhooks/{provider}", webhooks)
 	return mux
+}
+
+func toBytes(secrets []string) [][]byte {
+	out := make([][]byte, len(secrets))
+	for i, s := range secrets {
+		out[i] = []byte(s)
+	}
+	return out
 }
 
 // handleHealth is a liveness check: it never touches dependencies, so a

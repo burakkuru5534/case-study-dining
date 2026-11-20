@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+// webhookStub stands in for the real webhook handler; only routing is tested here.
+var webhookStub = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write([]byte(`{"provider":"` + r.PathValue("provider") + `"}`))
+})
+
 // fakePinger returns err, or blocks until ctx is done when block is true.
 type fakePinger struct {
 	err   error
@@ -52,6 +59,9 @@ func TestRoutes(t *testing.T) {
 			wantStatus: http.StatusServiceUnavailable, wantBody: `{"status":"unavailable"}`,
 		},
 		{name: "ready POST is not allowed", method: http.MethodPost, path: "/ready", wantStatus: http.StatusMethodNotAllowed},
+		{name: "webhook POST is routed with provider", method: http.MethodPost, path: "/webhooks/reference", wantStatus: http.StatusAccepted, wantBody: `{"provider":"reference"}`},
+		{name: "webhook GET is not allowed", method: http.MethodGet, path: "/webhooks/reference", wantStatus: http.StatusMethodNotAllowed},
+		{name: "webhook without provider is not found", method: http.MethodPost, path: "/webhooks/", wantStatus: http.StatusNotFound},
 	}
 
 	for _, tt := range tests {
@@ -63,12 +73,12 @@ func TestRoutes(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			rec := httptest.NewRecorder()
 
-			newMux(tt.db, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+			newMux(tt.db, webhookStub, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status: got %d, want %d", rec.Code, tt.wantStatus)
 			}
-			if tt.wantStatus == http.StatusMethodNotAllowed {
+			if tt.wantStatus == http.StatusMethodNotAllowed || tt.wantStatus == http.StatusNotFound {
 				return
 			}
 			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
@@ -88,7 +98,7 @@ func TestReadyIsBoundedByTimeout(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	start := time.Now()
-	newMux(fakePinger{block: true}, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+	newMux(fakePinger{block: true}, webhookStub, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if rec.Code != http.StatusServiceUnavailable {
